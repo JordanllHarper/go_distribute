@@ -1,0 +1,117 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+
+	shared "github.com/JordanllHarper/distributed_file_backup/shared"
+)
+
+type httpError interface {
+	error
+	Status() int
+}
+
+type dependencies struct {
+	shared.FileStore
+}
+
+func newDependencies(fs shared.FileStore) dependencies {
+	return dependencies{
+		FileStore: fs,
+	}
+}
+
+func addEndpointsV1(mux *http.ServeMux, d dependencies) {
+	updateCh := make(chan fileUpdate)
+	mux.HandleFunc("PUT /v1/files/{filename}", handlePutFilesByFilename(d, updateCh))
+	mux.HandleFunc("GET /v1/files/{filename}", handleGetFilesByFilename(d))
+	mux.HandleFunc("GET /v1/listen", handleGetListen(d, updateCh))
+}
+
+type fileUpdate struct {
+	filename string
+	b        []byte
+}
+
+func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/event-stream")
+		w.Header().Add("Cache-Control", "no-cache")
+		w.Header().Add("Connection", "keep-alive")
+
+		clientGone := r.Context().Done()
+		rc := http.NewResponseController(w)
+		for {
+			select {
+			case <-clientGone:
+				log.Println("Client disconnect")
+				return
+			case update := <-fileUpdates:
+				w.Header().Add("X-Filename", update.filename)
+				w.WriteHeader(http.StatusOK)
+				w.Write(update.b)
+
+				if err := rc.Flush(); err != nil {
+					log.Println("Error flushing", err)
+					return
+				}
+
+			}
+
+		}
+
+	}
+}
+
+// TODO: authentication via API Key
+func handlePutFilesByFilename(store shared.FileStorer, updateCh chan fileUpdate) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := r.PathValue("filename")
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := store.Store(filename, b); err != nil {
+			handleErrHttp(w, err)
+			return
+		}
+
+		updateCh <- fileUpdate{
+			filename: filename,
+			b:        b,
+		}
+
+		// TODO: perhaps we bundle all locations for all machines here
+		w.Header().Set("Location", fmt.Sprintf("/v1/files/%s", filename))
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+func handleGetFilesByFilename(store shared.FileGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := r.PathValue("filename")
+		file, err := store.Get(filename)
+		if err != nil {
+			handleErrHttp(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write(file)
+	}
+}
+
+func handleErrHttp(w http.ResponseWriter, err error) {
+	var httpErr httpError
+	if ok := errors.As(err, &httpErr); ok {
+		w.WriteHeader(httpErr.Status())
+		fmt.Fprint(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusInternalServerError)
+	log.Println("An unexpected error occurred:", err)
+}
