@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +35,7 @@ func addEndpointsV1(mux *http.ServeMux, d dependencies) {
 
 type fileUpdate struct {
 	filename string
-	b        []byte
+	b        io.Reader
 }
 
 func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.HandlerFunc {
@@ -53,7 +54,11 @@ func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.Han
 			case update := <-fileUpdates:
 				w.Header().Add("X-Filename", update.filename)
 				w.WriteHeader(http.StatusOK)
-				w.Write(update.b)
+				_, err := io.Copy(w, update.b)
+				if err != nil {
+					log.Println("Error writing", err)
+					return
+				}
 
 				if err := rc.Flush(); err != nil {
 					log.Println("Error flushing", err)
@@ -71,19 +76,16 @@ func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.Han
 func handlePutFilesByFilename(store shared.FileStorer, updateCh chan fileUpdate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filename := r.PathValue("filename")
-		b, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if err := store.Store(filename, b); err != nil {
+		var buf bytes.Buffer
+		tee := io.TeeReader(r.Body, &buf)
+		if err := store.Store(filename, tee); err != nil {
 			handleErrHttp(w, err)
 			return
 		}
 
 		updateCh <- fileUpdate{
 			filename: filename,
-			b:        b,
+			b:        &buf,
 		}
 
 		// TODO: perhaps we bundle all locations for all machines here

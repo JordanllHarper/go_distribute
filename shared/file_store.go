@@ -3,12 +3,13 @@ package shared
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 type FileStorer interface {
-	Store(filename string, b []byte) (err error)
+	Store(filename string, b io.Reader) (err error)
 }
 
 type FileGetter interface {
@@ -57,12 +58,12 @@ func (fs FileStorage) Get(filename string) ([]byte, error) {
 	}
 }
 
-func (fs FileStorage) Store(filename string, b []byte) error {
+func (fs FileStorage) Store(filename string, b io.Reader) error {
 	fullPath := fmt.Sprintf("%s/%s", fs.dir, filename)
 	f, err := os.Create(fullPath)
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(b)
+	_, err = io.Copy(f, b)
 	return err
 }

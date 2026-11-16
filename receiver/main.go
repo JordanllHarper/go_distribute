@@ -28,7 +28,7 @@ func main() {
 
 		n, err := res.Body.Read(buf)
 		if n > 0 && err != nil {
-			log.Println("Error reading from response body")
+			log.Println("Error reading from response body:", err)
 		}
 		fmt.Println(buf)
 	}
