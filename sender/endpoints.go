@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 
 	shared "github.com/JordanllHarper/distributed_file_backup/shared"
@@ -30,7 +31,7 @@ func addEndpointsV1(mux *http.ServeMux, d dependencies) {
 	updateCh := make(chan fileUpdate)
 	mux.HandleFunc("PUT /v1/files/{filename}", handlePutFilesByFilename(d, updateCh))
 	mux.HandleFunc("GET /v1/files/{filename}", handleGetFilesByFilename(d))
-	mux.HandleFunc("GET /v1/listen", handleGetListen(d, updateCh))
+	mux.HandleFunc("GET /v1/listen", handleGetListen(updateCh))
 }
 
 type fileUpdate struct {
@@ -38,9 +39,10 @@ type fileUpdate struct {
 	b        io.Reader
 }
 
-func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.HandlerFunc {
+func handleGetListen(fileUpdates chan fileUpdate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Content-Type", "text/event-stream")
+		mw := multipart.NewWriter(w)
+		w.Header().Set("Content-Type", mw.FormDataContentType())
 		w.Header().Add("Cache-Control", "no-cache")
 		w.Header().Add("Connection", "keep-alive")
 
@@ -52,9 +54,8 @@ func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.Han
 				log.Println("Client disconnect")
 				return
 			case update := <-fileUpdates:
-				w.Header().Add("X-Filename", update.filename)
-				w.WriteHeader(http.StatusOK)
-				_, err := io.Copy(w, update.b)
+				fileWriter, err := mw.CreateFormFile("filename", update.filename)
+				_, err = io.Copy(fileWriter, update.b)
 				if err != nil {
 					log.Println("Error writing", err)
 					return
@@ -64,11 +65,8 @@ func handleGetListen(fs shared.FileGetter, fileUpdates chan fileUpdate) http.Han
 					log.Println("Error flushing", err)
 					return
 				}
-
 			}
-
 		}
-
 	}
 }
 

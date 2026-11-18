@@ -1,35 +1,59 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"os"
 )
 
 func main() {
 	sender := flag.String("senderAddr", "localhost:8080", "address to listen to")
 	_ = flag.String("addr", "localhost:8081", "address to set the server to")
-	_ = flag.String("dir", "", "where to store files")
+	dir := flag.String("dir", "", "where to store files")
 	flag.Parse()
 
 	senderAddr := fmt.Sprintf("http://%s%s", *sender, "/v1/listen")
-
-	req, err := http.NewRequest("GET", senderAddr, nil)
-	if err != nil {
-		log.Fatalln("Failed to make request for sender:", err)
-	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := http.DefaultClient.Get(senderAddr)
 	if err != nil {
 		log.Fatalln("Failed to send request to sender:", err)
 	}
-	for {
-		buf := make([]byte, 16)
+	defer res.Body.Close()
 
-		n, err := res.Body.Read(buf)
-		if n > 0 && err != nil {
-			log.Println("Error reading from response body:", err)
+	_, params, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
+	if err != nil {
+		log.Fatalln("Failed to get content type from the server")
+	}
+	boundary := params["boundary"]
+	mr := multipart.NewReader(res.Body, boundary)
+	for {
+		part, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			log.Println("Closed stream")
+			return
 		}
-		fmt.Println(buf)
+
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Println("Stream error:", err)
+			return
+		}
+
+		filename := part.FileName()
+		file, err := os.Create(fmt.Sprintf("%s/%s", *dir, filename))
+		if err != nil {
+			log.Fatalln("Error creating file:", err)
+		}
+		written, err := io.Copy(file, part)
+		if err != nil {
+			log.Printf("Error writing to file %s: %s", filename, err)
+			return
+		}
+		file.Close()
+		log.Printf("Written %v to %v", written, filename)
 	}
 }
