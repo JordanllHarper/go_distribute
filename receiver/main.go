@@ -13,6 +13,29 @@ import (
 	"os"
 )
 
+func main() {
+	sender := flag.String("senderAddr", "localhost:8080", "address to listen to")
+	addr := flag.String("addr", "localhost:8081", "address to set the server to")
+	dir := flag.String("dir", "", "where to store files")
+	flag.Parse()
+	go listenForFiles(*sender, *dir)
+
+	fs := shared.NewFileStorage(*dir)
+
+	http.HandleFunc("GET /v1/files/{filename}", func(w http.ResponseWriter, r *http.Request) {
+		filename := r.PathValue("filename")
+		file, err := fs.Get(filename)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(file)
+	})
+
+	http.ListenAndServe(*addr, nil)
+}
+
 func listenForFiles(sender, dir string) {
 	senderAddr := fmt.Sprintf("http://%s%s", sender, "/v1/listen")
 	res, err := http.DefaultClient.Get(senderAddr)
@@ -52,27 +75,4 @@ func listenForFiles(sender, dir string) {
 		file.Close()
 		log.Printf("Written %v to %v", written, filename)
 	}
-}
-
-func main() {
-	sender := flag.String("senderAddr", "localhost:8080", "address to listen to")
-	addr := flag.String("addr", "localhost:8081", "address to set the server to")
-	dir := flag.String("dir", "", "where to store files")
-	flag.Parse()
-	go listenForFiles(*sender, *dir)
-
-	fs := shared.NewFileStorage(*dir)
-
-	http.HandleFunc("GET /v1/files/{filename}", func(w http.ResponseWriter, r *http.Request) {
-		filename := r.PathValue("filename")
-		file, err := fs.Get(filename)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		w.Write(file)
-	})
-
-	http.ListenAndServe(*addr, nil)
 }
