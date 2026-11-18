@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	shared "github.com/JordanllHarper/distributed_file_backup/shared"
 	"io"
 	"log"
 	"mime"
@@ -12,13 +13,8 @@ import (
 	"os"
 )
 
-func main() {
-	sender := flag.String("senderAddr", "localhost:8080", "address to listen to")
-	_ = flag.String("addr", "localhost:8081", "address to set the server to")
-	dir := flag.String("dir", "", "where to store files")
-	flag.Parse()
-
-	senderAddr := fmt.Sprintf("http://%s%s", *sender, "/v1/listen")
+func listenForFiles(sender, dir string) {
+	senderAddr := fmt.Sprintf("http://%s%s", sender, "/v1/listen")
 	res, err := http.DefaultClient.Get(senderAddr)
 	if err != nil {
 		log.Fatalln("Failed to send request to sender:", err)
@@ -44,7 +40,7 @@ func main() {
 		}
 
 		filename := part.FileName()
-		file, err := os.Create(fmt.Sprintf("%s/%s", *dir, filename))
+		file, err := os.Create(fmt.Sprintf("%s/%s", dir, filename))
 		if err != nil {
 			log.Fatalln("Error creating file:", err)
 		}
@@ -56,4 +52,27 @@ func main() {
 		file.Close()
 		log.Printf("Written %v to %v", written, filename)
 	}
+}
+
+func main() {
+	sender := flag.String("senderAddr", "localhost:8080", "address to listen to")
+	addr := flag.String("addr", "localhost:8081", "address to set the server to")
+	dir := flag.String("dir", "", "where to store files")
+	flag.Parse()
+	go listenForFiles(*sender, *dir)
+
+	fs := shared.NewFileStorage(*dir)
+
+	http.HandleFunc("GET /v1/files/{filename}", func(w http.ResponseWriter, r *http.Request) {
+		filename := r.PathValue("filename")
+		file, err := fs.Get(filename)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(file)
+	})
+
+	http.ListenAndServe(*addr, nil)
 }

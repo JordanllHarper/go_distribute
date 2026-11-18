@@ -65,6 +65,7 @@ func handleGetListen(fileUpdates chan fileUpdate) http.HandlerFunc {
 					log.Println("Error flushing", err)
 					return
 				}
+				log.Println("Flushed file to client")
 			}
 		}
 	}
